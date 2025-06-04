@@ -1,0 +1,48 @@
+/venv
+*.pyc
+__pycache__
+logs
+
+# Added by Claude Task Master
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev-debug.log
+# Dependency directories
+node_modules/
+# Environment variables
+.env
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# OS specific
+.DS_Store
+# Task files
+tasks.json
+tasks/
+
+# Text-to-3D project specifics
+# Model files - exclude large model binaries
+app/models/*.gguf
+app/models/*.bin
+app/models/*.onnx
+app/models/*.pt
+
+# SQLite database files
+app/data/*.db
+
+# Generated output files
+output_*.png
+model_*.glb
+model_*.obj
+model_*.stl
+
+# Temporary files
+*.temp

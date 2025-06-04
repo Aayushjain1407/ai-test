@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Tuple
 
 import requests
 
-from core.remote import Remote
+from app.core.remote import Remote
 from openfabric_pysdk.helper import has_resource_fields, json_schema_to_marshmallow, resolve_resources
 from openfabric_pysdk.loader import OutputSchemaInst
 
