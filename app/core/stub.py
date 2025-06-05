@@ -1,141 +1,114 @@
 import json
 import logging
-import pprint
-from typing import Any, Dict, List, Literal, Tuple
+import os
+from typing import Any, Dict, List, Optional
 
 import requests
-
-from app.core.remote import Remote
-from openfabric_pysdk.helper import has_resource_fields, json_schema_to_marshmallow, resolve_resources
 from openfabric_pysdk.loader import OutputSchemaInst
+
+from openfabric_pysdk.helper import has_resource_fields, json_schema_to_marshmallow, resolve_resources
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO if os.environ.get("DEBUG") else logging.WARNING,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Type aliases for clarity
 Manifests = Dict[str, dict]
-Schemas = Dict[str, Tuple[dict, dict]]
-Connections = Dict[str, Remote]
-
+Schemas = Dict[str, tuple[dict, dict]]
 
 class Stub:
     """
-    Stub acts as a lightweight client interface that initializes remote connections
-    to multiple Openfabric applications, fetching their manifests, schemas, and enabling
-    execution of calls to these apps.
-
-    Attributes:
-        _schema (Schemas): Stores input/output schemas for each app ID.
-        _manifest (Manifests): Stores manifest metadata for each app ID.
-        _connections (Connections): Stores active Remote connections for each app ID.
+    Stub for interacting with Openfabric apps
     """
-
-    # ----------------------------------------------------------------------
+    
     def __init__(self, app_ids: List[str]):
         """
-        Initializes the Stub instance by loading manifests, schemas, and connections
-        for each given app ID.
-
+        Initialize the Stub with a list of Openfabric app IDs
+        
         Args:
-            app_ids (List[str]): A list of application identifiers (hostnames or URLs).
+            app_ids: List of Openfabric app IDs to connect to
         """
         self._schema: Schemas = {}
         self._manifest: Manifests = {}
-        self._connections: Connections = {}
-
+        self._connections: Dict[str, Any] = {}
+        
+        # Default app IDs if none provided
+        if not app_ids:
+            app_ids = [
+                "f0997a01-d6d3-a5fe-53d8-561300318557",  # Text-to-Image
+                "69543f29-4d41-4afc-7f29-3d51591f11eb"   # Image-to-3D
+            ]
+        
         for app_id in app_ids:
-            base_url = app_id.strip('/')
-
             try:
+                base_url = f"https://{app_id}.node3.openfabric.network"
+                
                 # Fetch manifest
-                manifest = requests.get(f"https://{base_url}/manifest", timeout=5).json()
-                logging.info(f"[{app_id}] Manifest loaded: {manifest}")
+                manifest = requests.get(f"{base_url}/manifest", timeout=10).json()
+                logger.info(f"[{app_id}] Manifest loaded")
                 self._manifest[app_id] = manifest
-
-                # Fetch input schema
-                input_schema = requests.get(f"https://{base_url}/schema?type=input", timeout=5).json()
-                logging.info(f"[{app_id}] Input schema loaded: {input_schema}")
-
-                # Fetch output schema
-                output_schema = requests.get(f"https://{base_url}/schema?type=output", timeout=5).json()
-                logging.info(f"[{app_id}] Output schema loaded: {output_schema}")
+                
+                # Fetch schemas
+                input_schema = requests.get(f"{base_url}/schema?type=input", timeout=10).json()
+                output_schema = requests.get(f"{base_url}/schema?type=output", timeout=10).json()
                 self._schema[app_id] = (input_schema, output_schema)
-
-                # Establish Remote WebSocket connection
-                self._connections[app_id] = Remote(f"wss://{base_url}/app", f"{app_id}-proxy").connect()
-                logging.info(f"[{app_id}] Connection established.")
+                
+                logger.info(f"[{app_id}] Initialized successfully")
+                
             except Exception as e:
-                logging.error(f"[{app_id}] Initialization failed: {e}")
-
-    # ----------------------------------------------------------------------
-    def call(self, app_id: str, data: Any, uid: str = 'super-user') -> dict:
+                logger.error(f"[{app_id}] Initialization failed: {str(e)}")
+                raise
+    
+    @classmethod
+    def call(cls, app_id: str, parameters: dict = None, uid: str = 'super-user') -> dict:
         """
-        Sends a request to the specified app via its Remote connection.
-
+        Call an Openfabric app with the given parameters
+        
         Args:
-            app_id (str): The application ID to route the request to.
-            data (Any): The input data to send to the app.
-            uid (str): The unique user/session identifier for tracking (default: 'super-user').
-
+            app_id: The Openfabric app ID to call
+            parameters: Parameters for the app
+            uid: User ID for the request
+            
         Returns:
-            dict: The output data returned by the app.
-
-        Raises:
-            Exception: If no connection is found for the provided app ID, or execution fails.
+            dict: The response from the app
         """
-        connection = self._connections.get(app_id)
-        if not connection:
-            raise Exception(f"Connection not found for app ID: {app_id}")
-
         try:
-            handler = connection.execute(data, uid)
-            result = connection.get_response(handler)
-
-            schema = self.schema(app_id, 'output')
-            marshmallow = json_schema_to_marshmallow(schema)
-            handle_resources = has_resource_fields(marshmallow())
-
-            if handle_resources:
-                result = resolve_resources("https://" + app_id + "/resource?reid={reid}", result, marshmallow())
-
+            if parameters is None:
+                parameters = {}
+                
+            base_url = f"https://{app_id}.node3.openfabric.network"
+            
+            # Prepare the request data
+            request_data = {
+                "request": parameters,
+                "uid": uid
+            }
+            
+            # Make the API call
+            response = requests.post(
+                f"{base_url}/execute",
+                json=request_data,
+                headers={"Content-Type": "application/json"},
+                timeout=30
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            
+            # Handle binary data in the response
+            if isinstance(result, dict) and 'result' in result and isinstance(result['result'], dict):
+                if 'resource' in result['result']:
+                    # Fetch the binary resource
+                    resource_url = f"{base_url}/resource?reid={result['result']['resource']}"
+                    resource_response = requests.get(resource_url)
+                    resource_response.raise_for_status()
+                    return {'result': resource_response.content}
+            
             return result
+            
         except Exception as e:
-            logging.error(f"[{app_id}] Execution failed: {e}")
-
-    # ----------------------------------------------------------------------
-    def manifest(self, app_id: str) -> dict:
-        """
-        Retrieves the manifest metadata for a specific application.
-
-        Args:
-            app_id (str): The application ID for which to retrieve the manifest.
-
-        Returns:
-            dict: The manifest data for the app, or an empty dictionary if not found.
-        """
-        return self._manifest.get(app_id, {})
-
-    # ----------------------------------------------------------------------
-    def schema(self, app_id: str, type: Literal['input', 'output']) -> dict:
-        """
-        Retrieves the input or output schema for a specific application.
-
-        Args:
-            app_id (str): The application ID for which to retrieve the schema.
-            type (Literal['input', 'output']): The type of schema to retrieve.
-
-        Returns:
-            dict: The requested schema (input or output).
-
-        Raises:
-            ValueError: If the schema type is invalid or the schema is not found.
-        """
-        _input, _output = self._schema.get(app_id, (None, None))
-
-        if type == 'input':
-            if _input is None:
-                raise ValueError(f"Input schema not found for app ID: {app_id}")
-            return _input
-        elif type == 'output':
-            if _output is None:
-                raise ValueError(f"Output schema not found for app ID: {app_id}")
-            return _output
-        else:
-            raise ValueError("Type must be either 'input' or 'output'")
+            logger.error(f"Error calling Openfabric app {app_id}: {str(e)}")
+            raise

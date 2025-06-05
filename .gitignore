@@ -46,3 +46,6 @@ model_*.stl
 
 # Temporary files
 *.temp
+
+DS_Store
+app/.DS_Store
